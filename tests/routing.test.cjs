@@ -18,6 +18,7 @@ const {
     REMOTE_DNS,
 } = require("../electron/routing.cjs");
 const { CoreController } = require("../electron/core.cjs");
+const { prepareHealthProfile } = require("../electron/recovery.cjs");
 const { freePort, createTunConfig } = require("../electron/tun.cjs");
 const root = path.resolve(__dirname, "..");
 function profile(kind, port, serverPort) {
@@ -207,11 +208,12 @@ test(
                     const directory = await fs.mkdtemp(
                         path.join(os.tmpdir(), "qingzhou-route-"),
                     );
+                    const healthPort = await freePort();
                     const port = await freePort(),
-                        prepared = applyRouting(
+                        prepared = prepareHealthProfile(applyRouting(
                             profile(kind, port, proxy.port),
                             mode,
-                        );
+                        ), healthPort);
                     // Both exits are local recording proxies. The unmodified native
                     // routing engine chooses between them; no external or DB access.
                     prepared.config.outbounds = prepared.config.outbounds.map(
@@ -281,6 +283,7 @@ test(
                                     logs.slice(-10).join("\n");
                                 throw error;
                             });
+                        assert.equal(await request(healthPort, "223.5.5.5"), "PROXY", "Health check must use the node even for a domestic IP");
                         for (const [target, expected] of [
                             [
                                 "www.baidu.com",
@@ -360,3 +363,27 @@ test(
         }
     },
 );
+
+test("bundled cores validate dedicated health listeners and forced proxy routes", { skip: process.platform !== "win32" }, async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "qingzhou-health-config-"));
+    try {
+        for (const kind of ["Xray", "sing-box"]) {
+            for (const mode of ["smart", "global"]) {
+                const original = applyRouting(profile(kind, 18080, 18081), mode);
+                const before = JSON.stringify(original);
+                const prepared = prepareHealthProfile(original, 18082);
+                assert.equal(JSON.stringify(original), before);
+                const rules = kind === "Xray" ? prepared.config.routing.rules : prepared.config.route.rules;
+                assert.equal(rules[0].outboundTag || rules[0].outbound, "proxy");
+                assert.deepEqual(rules[0].inboundTag || rules[0].inbound, ["chenglian-health"]);
+                const file = path.join(directory, `${kind}-${mode}.json`);
+                await fs.writeFile(file, JSON.stringify(prepared.config));
+                await promisify(execFile)(path.join(root, "vendor/cores", kind === "Xray" ? "xray/xray.exe" : "sing-box/sing-box.exe"),
+                    kind === "Xray" ? ["run", "-test", "-config", file] : ["check", "-c", file],
+                    { windowsHide: true, timeout: 15000 });
+            }
+        }
+    } finally {
+        await fs.rm(directory, { recursive: true, force: true });
+    }
+});

@@ -6,12 +6,14 @@ const {
     Menu,
     Tray,
     nativeImage,
+    powerMonitor,
 } = require("electron");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { ProfileStore, parseConfig } = require("./profiles.cjs");
 const { CoreController } = require("./core.cjs");
+const { ConnectionRecovery, prepareHealthProfile } = require("./recovery.cjs");
 const { importText } = require("./shares.cjs");
 const { SystemProxy } = require("./proxy.cjs");
 const { randomUUID } = require("node:crypto");
@@ -39,6 +41,7 @@ let window,
     proxy,
     tun,
     measurement,
+    recovery,
     administrator = false,
     administratorChecked = false,
     quitting = false;
@@ -97,7 +100,8 @@ async function connection(operation) {
         broadcast();
     }
 }
-async function stopConnection() {
+async function stopConnection(preserveRecovery = false) {
+    if (!preserveRecovery) recovery?.stop();
     await tun?.stop();
     await proxy.restore();
     await core.stop();
@@ -233,6 +237,30 @@ async function launch() {
                 },
                 log,
             );
+            let suspended = false;
+            recovery = new ConnectionRecovery({
+                busy: () => connectionBusy || quitting || quitRequested || suspended,
+                log,
+                probe: async (session) => {
+                    if (core.state.phase !== "running") throw Error("内核已停止");
+                    if (session.port) await verifyConnectivity(async (url) => {
+                        const result = await transfer(session.port, url, { budget: 8000 });
+                        if (result.status !== 204) throw Error("节点响应异常");
+                    });
+                    if (session.tun) await verifyConnectivity(systemProbe);
+                },
+                reconnect: (session) => connection(async () => {
+                    if (recovery.session !== session || quitRequested) return;
+                    await startConnection(session.id, true);
+                    await recovery.probe(session);
+                }),
+            });
+            powerMonitor.on("suspend", () => { suspended = true; });
+            powerMonitor.on("resume", () => {
+                suspended = false;
+                recovery.resume();
+            });
+            powerMonitor.on("unlock-screen", () => recovery.resume());
             handle("snapshot", () => snapshot());
             handle("set-routing-mode", (mode) =>
                 connection(async () => {
@@ -372,126 +400,137 @@ async function launch() {
                 await store.save();
                 broadcast();
             });
-            handle("start", (id) =>
-                connection(async () => {
-                    const profile = store.data.profiles.find(
-                        (profile) => profile.id === id,
+            async function startConnection(id, recovering = false) {
+                const profile = store.data.profiles.find(
+                    (profile) => profile.id === id,
+                );
+                if (!profile) throw new Error("请先导入并选择配置。");
+                if (
+                    store.data.tunEnabled &&
+                    !(await checkAdministrator())
+                ) {
+                    await requestElevation();
+                    return;
+                }
+                if (
+                    !store.data.tunEnabled &&
+                    store.data.systemProxy !== false &&
+                    !profile.httpPort
+                )
+                    throw new Error(
+                        "该配置没有 HTTP 入站，请导入节点链接，或先关闭自动系统代理。",
                     );
-                    if (!profile) throw new Error("请先导入并选择配置。");
-                    if (
-                        store.data.tunEnabled &&
-                        !(await checkAdministrator())
-                    ) {
-                        await requestElevation();
-                        return;
+                const binary = binaries()[profile.kind];
+                await stopConnection(recovering);
+                let tunAttempted = false, healthPort;
+                try {
+                    healthPort = await freePort();
+                    const runtimeProfile = applyRouting(
+                        profile,
+                        store.data.routingMode || "smart",
+                    );
+                    let bridge;
+                    if (store.data.tunEnabled) {
+                        const network = await physicalNetwork();
+                        bridge = {
+                            port: await freePort(),
+                            username: randomUUID(),
+                            password: randomUUID(),
+                            coreBinary: binary,
+                            routingMode: store.data.routingMode || "smart",
+                            domains: bootstrapDomains(profile),
+                            bootstrapDns: network.dns,
+                            interfaceName: network.interfaceName,
+                            healthPort,
+                        };
+                        log(`TUN 上游网卡：${network.interfaceName}。`);
                     }
-                    if (
-                        !store.data.tunEnabled &&
-                        store.data.systemProxy !== false &&
-                        !profile.httpPort
-                    )
-                        throw new Error(
-                            "该配置没有 HTTP 入站，请导入节点链接，或先关闭自动系统代理。",
+                    await core.start(
+                        bridge
+                            ? prepareTunProfile(
+                                  runtimeProfile,
+                                  bridge.port,
+                                  bridge.username,
+                                  bridge.password,
+                                  bridge,
+                              )
+                            : prepareHealthProfile(runtimeProfile, healthPort),
+                        binary,
+                    );
+                    if (bridge) {
+                        log("正在检查节点连接，检查通过后再开启 TUN。");
+                        await verifyConnectivity(async (url) => {
+                            const result = await transfer(
+                                bridge.healthPort,
+                                url,
+                                { budget: 8000 },
+                            );
+                            if (result.status !== 204)
+                                throw new Error("节点响应异常");
+                        });
+                        tunAttempted = true;
+                        await tun.start(
+                            path.join(coreRoot, "sing-box", "sing-box.exe"),
+                            bridge,
                         );
-                    const binary = binaries()[profile.kind];
-                    await stopConnection();
-                    let tunAttempted = false;
-                    try {
-                        const runtimeProfile = applyRouting(
-                            profile,
-                            store.data.routingMode || "smart",
+                        await verifyConnectivity(systemProbe);
+                        if (!tun.child) throw new Error("TUN 已退出");
+                        tun.update("running");
+                        log(
+                            "TUN 已通过实际联网检查：接管 TCP / UDP 与 DNS。",
                         );
-                        let bridge;
-                        if (store.data.tunEnabled) {
-                            const network = await physicalNetwork();
-                            bridge = {
-                                port: await freePort(),
-                                username: randomUUID(),
-                                password: randomUUID(),
-                                coreBinary: binary,
-                                routingMode: store.data.routingMode || "smart",
-                                domains: bootstrapDomains(profile),
-                                bootstrapDns: network.dns,
-                                interfaceName: network.interfaceName,
-                                healthPort: await freePort(),
-                            };
-                            log(`TUN 上游网卡：${network.interfaceName}。`);
-                        }
-                        await core.start(
-                            bridge
-                                ? prepareTunProfile(
-                                      runtimeProfile,
-                                      bridge.port,
-                                      bridge.username,
-                                      bridge.password,
-                                      bridge,
-                                  )
-                                : runtimeProfile,
-                            binary,
-                        );
-                        if (bridge) {
-                            log("正在检查节点连接，检查通过后再开启 TUN。");
-                            await verifyConnectivity(async (url) => {
-                                const result = await transfer(
-                                    bridge.healthPort,
-                                    url,
-                                    { budget: 8000 },
+                    } else if (store.data.systemProxy !== false)
+                        await proxy.enable(profile);
+                    const session = { id, port: healthPort, tun: !!bridge };
+                    if (recovering && recovery.session) Object.assign(recovery.session, session);
+                    else if (session.port || session.tun) recovery.start(session);
+                    if (core.state.phase !== "running")
+                        throw new Error("内核已经退出，请查看日志。");
+                } catch (error) {
+                    log(`连接检查失败：${error.message}`);
+                    await stopConnection(recovering);
+                    if (tunAttempted) {
+                        store.data.tunEnabled = false;
+                        await store.save();
+                        if (
+                            store.data.systemProxy !== false &&
+                            profile.httpPort
+                        ) {
+                            let recovered = false;
+                            try {
+                                await core.start(
+                                    prepareHealthProfile(applyRouting(
+                                        profile,
+                                        store.data.routingMode || "smart",
+                                    ), healthPort),
+                                    binary,
                                 );
-                                if (result.status !== 204)
-                                    throw new Error("节点响应异常");
-                            });
-                            tunAttempted = true;
-                            await tun.start(
-                                path.join(coreRoot, "sing-box", "sing-box.exe"),
-                                bridge,
-                            );
-                            await verifyConnectivity(systemProbe);
-                            if (!tun.child) throw new Error("TUN 已退出");
-                            tun.update("running");
-                            log(
-                                "TUN 已通过实际联网检查：接管 TCP / UDP 与 DNS。",
-                            );
-                        } else if (store.data.systemProxy !== false)
-                            await proxy.enable(profile);
-                        if (core.state.phase !== "running")
-                            throw new Error("内核已经退出，请查看日志。");
-                    } catch (error) {
-                        log(`连接检查失败：${error.message}`);
-                        await stopConnection();
-                        if (tunAttempted) {
-                            store.data.tunEnabled = false;
-                            await store.save();
-                            if (
-                                store.data.systemProxy !== false &&
-                                profile.httpPort
-                            ) {
-                                let recovered = false;
-                                try {
-                                    await core.start(
-                                        applyRouting(
-                                            profile,
-                                            store.data.routingMode || "smart",
-                                        ),
-                                        binary,
-                                    );
-                                    await proxy.enable(profile);
-                                    recovered = true;
-                                } catch {
-                                    await stopConnection();
-                                }
-                                if (recovered)
-                                    throw new Error(
-                                        "TUN 联网检查失败，已关闭 TUN 并回退到系统代理。",
-                                    );
+                                await proxy.enable(profile);
+                                recovered = true;
+                            } catch {
+                                await stopConnection(recovering);
                             }
-                            throw new Error(
-                                "TUN 联网检查失败，已关闭 TUN 并撤销接管，请查看日志。",
-                            );
+                            if (recovered) {
+                                const session = { id, port: healthPort, tun: false };
+                                if (recovering && recovery.session) Object.assign(recovery.session, session);
+                                else recovery.start(session);
+                                log("TUN 联网检查失败，已关闭 TUN 并回退到系统代理。");
+                                throw new Error(
+                                    "TUN 联网检查失败，已关闭 TUN 并回退到系统代理。",
+                                );
+                            }
                         }
-                        throw error;
+                        throw new Error(
+                            "TUN 联网检查失败，已关闭 TUN 并撤销接管，请查看日志。",
+                        );
                     }
-                }),
-            );
+                    throw error;
+                }
+            }
+            handle("start", (id) => connection(async () => {
+                recovery.stop();
+                await startConnection(id);
+            }));
             handle("stop", () => connection(stopConnection));
             handle("measure", async (id, full) => {
                 if (typeof full !== "boolean")

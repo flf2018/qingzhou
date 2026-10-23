@@ -140,6 +140,7 @@ function applyRouting(profile, mode = "smart", root = DEFAULT_RULE_ROOT) {
         config.routing = {
             domainStrategy: smart ? "IPOnDemand" : "IPOnDemand",
             rules: [
+                { type: "field", inboundTag: ["chenglian-health"], outboundTag: proxy },
                 {
                     type: "field",
                     inboundTag: ["qingzhou-domestic-query"],
@@ -224,6 +225,7 @@ function applyRouting(profile, mode = "smart", root = DEFAULT_RULE_ROOT) {
             default_domain_resolver: REMOTE_DNS,
             rule_set: smart ? localSets(root) : [],
             rules: [
+                { inbound: ["chenglian-health"], action: "route", outbound: proxy },
                 { domain: ["localhost"], action: "route", outbound: DIRECT },
                 {
                     domain_suffix: LOCAL_DOMAINS,
