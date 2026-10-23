@@ -1,0 +1,32 @@
+{
+    "name": "v2rayn-electron",
+    "version": "0.6.0",
+    "private": true,
+    "description": "轻舟，一款独立运行的桌面代理客户端",
+    "license": "GPL-3.0",
+    "main": "electron/main.cjs",
+    "scripts": {
+        "dev": "vite --host 127.0.0.1",
+        "desktop": "npm run build:native && npm run build:routing && npm run build && electron .",
+        "build": "vite build",
+        "test": "node --test tests/*.test.cjs",
+        "test:desktop": "npm run build && electron tests/smoke.cjs && electron tests/tun-recovery.cjs && electron tests/startup.cjs",
+        "dist:win": "npm run build:native && npm run build:routing && npm run build && electron-builder --win nsis zip --x64",
+        "pack:win": "npm run build:native && npm run build:routing && npm run build && electron-builder --win --dir --x64",
+        "test:exe": "node tests/verify-exe.cjs release/win-unpacked/QingZhou.exe",
+        "download:cores": "powershell -NoProfile -File scripts/download-core.ps1 Xray && powershell -NoProfile -File scripts/download-core.ps1 sing-box",
+        "build:native": "powershell -NoProfile -File scripts/build-native.ps1",
+        "dist:portable": "npm run build:native && npm run build:routing && npm run build && electron-builder --win portable --x64",
+        "test:zip": "node scripts/verify-archive.cjs",
+        "build:routing": "node scripts/build-routing.cjs"
+    },
+    "dependencies": {
+        "vue": "3.5.44"
+    },
+    "devDependencies": {
+        "@vitejs/plugin-vue": "6.0.10",
+        "electron": "44.8.0",
+        "electron-builder": "26.15.3",
+        "vite": "8.3.4"
+    }
+}

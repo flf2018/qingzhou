@@ -1,0 +1,18 @@
+{
+  "Xray": {
+    "version": "26.3.27",
+    "url": "https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-windows-64.zip",
+    "sha256": "d004c39288ce9ada487c6f398c7c545f7d749e44bdfdd59dbc9f865afba4e1ad",
+    "directory": "xray",
+    "executable": "xray.exe",
+    "license": "https://raw.githubusercontent.com/XTLS/Xray-core/v26.3.27/LICENSE"
+  },
+  "sing-box": {
+    "version": "1.14.3",
+    "url": "https://github.com/SagerNet/sing-box/releases/download/v1.14.3/sing-box-1.14.3-windows-amd64.zip",
+    "sha256": "d8b86ef58936dba9230ec6a57ffa4243933f3c14ef4809828b6c553440ed1518",
+    "directory": "sing-box",
+    "executable": "sing-box.exe",
+    "license": "https://raw.githubusercontent.com/SagerNet/sing-box/v1.14.3/LICENSE"
+  }
+}

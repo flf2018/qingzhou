@@ -1,0 +1,48 @@
+appId: io.v2rayn.electron.preview
+productName: 轻舟
+artifactName: QingZhou-${version}-win-x64.${ext}
+electronDist: node_modules/electron/dist
+directories:
+  output: release
+files:
+  - dist/**/*
+  - electron/**/*
+  - build/icon.ico
+  - build/chenglian.png
+  - package.json
+  - vendor/cores/manifest.json
+extraResources:
+  - from: vendor/routing
+    to: routing
+  - from: build/TunHost.exe
+    to: TunHost.exe
+  - from: vendor/cores
+    to: cores
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: zip
+      arch: [x64]
+  icon: build/icon.ico
+  executableName: QingZhou
+  signExecutable: false
+portable:
+  artifactName: QingZhou-${version}-portable.exe
+  requestExecutionLevel: user
+nsis:
+  artifactName: QingZhou-${version}-Setup.${ext}
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: 轻舟
+  uninstallDisplayName: 轻舟
+  deleteAppDataOnUninstall: false
+  runAfterFinish: false
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerLanguages:
+    - zh_CN
+    - en_US

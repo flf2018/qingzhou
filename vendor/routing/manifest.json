@@ -1,0 +1,10 @@
+{
+  "source": "Loyalsoldier/v2ray-rules-dat via bundled Xray 26.3.27; CN entries only",
+  "upstream": "https://github.com/Loyalsoldier/v2ray-rules-dat",
+  "license": "GPL-3.0",
+  "schema": "https://github.com/XTLS/Xray-core/blob/v26.3.27/app/router/config.proto",
+  "geositeSha256": "adf92de0cfc70e458b399f04c5f912bf42d115ed7e37281b30e2f1c68605e4e9",
+  "geoipSha256": "744c97b74c52bae2ac8664fef6ac481d7765cb8432a0df54f0368a88b9b4a354",
+  "domains": 118515,
+  "cidrs": 9017
+}
