@@ -191,7 +191,8 @@ function applyRouting(profile, mode = "smart", root = DEFAULT_RULE_ROOT) {
                     server_port: 443,
                     path: "/dns-query",
                     tls: { enabled: true, server_name: "cloudflare-dns.com" },
-                    detour: proxy,
+                    ...(config.outbounds.find(o => o.tag === proxy)?.type === "direct"
+                        ? {} : { detour: proxy }),
                 },
             ],
             final: REMOTE_DNS,
@@ -259,6 +260,11 @@ function applyTunRouting(config, mode = "smart", root = DEFAULT_RULE_ROOT) {
     config.inbounds.find((i) => i.type === "tun").route_exclude_address =
         PRIVATE_CIDRS;
     config.dns.reverse_mapping = true;
+    // Keep the core-process bypass first; health traffic from the desktop must
+    // traverse TUN -> SOCKS bridge -> node, independently of OS DNS results.
+    config.route.rules.push({
+        ip_cidr: ["1.1.1.1/32"], action: "route", outbound: "node",
+    });
     if (mode === "smart") {
         config.route.rule_set = localSets(root);
         config.dns.servers.push({

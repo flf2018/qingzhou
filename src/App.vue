@@ -39,6 +39,18 @@ const running = computed(
         state.value.core.phase === "running" &&
         (!state.value.tunEnabled || state.value.tunActive),
 );
+const connectionStatus = computed(() => {
+    const phase = state.value.connectionHealth?.phase;
+    return ({ healthy: "代理联网正常", degraded: "代理通路异常",
+        reconnecting: "正在自动重连", checking: "正在检查代理连接" })[phase]
+        || (running.value ? "内核运行中" : state.value.core.phase === "starting"
+            ? "内核启动中" : "尚未连接");
+});
+const connectionWarning = computed(() => {
+    const phase = state.value.connectionHealth?.phase;
+    return phase === "degraded" ? "代理通路检测失败，正在等待自动恢复；详细原因见运行日志。"
+        : phase === "reconnecting" ? "正在恢复当前节点连接，请稍候。" : "";
+});
 const selectedMeasurement = computed(
     () => state.value.measurements?.[state.value.selectedId] || {},
 );
@@ -243,14 +255,10 @@ onUnmounted(() => unsubscribe?.());
                         <div class="connection-info">
                             <div class="section-kicker">
                                 <span
-                                    :class="['status-dot', { running }]"
+                                    :class="['status-dot', { running: running && state.connectionHealth?.phase === 'healthy' }]"
                                 ></span
                                 >{{
-                                    running
-                                        ? "内核运行中"
-                                        : state.core.phase === "starting"
-                                          ? "内核启动中"
-                                          : "尚未连接"
+                                    connectionStatus
                                 }}
                             </div>
                             <h2>
@@ -262,9 +270,9 @@ onUnmounted(() => unsubscribe?.());
                             </h2>
                             <p>
                                 {{
-                                    running
+                                    connectionWarning || (running
                                         ? `本地代理 ${runningProfile?.host}:${runningProfile?.port} 已就绪 · ${state.tunActive ? "TUN 已接管流量" : state.proxyActive ? "系统代理已开启" : "仅本地代理"}`
-                                        : "内核已内置，导入节点或订阅后即可连接。"
+                                        : "内核已内置，导入节点或订阅后即可连接。")
                                 }}
                             </p>
                             <div class="connection-tags">

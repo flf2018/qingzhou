@@ -117,6 +117,11 @@ test("routing modes use complete offline datasets and preserve saved node config
             config.inbounds[0].route_exclude_address,
             PRIVATE_CIDRS,
         );
+        const healthRule = config.route.rules.findIndex(r =>
+            r.ip_cidr?.includes("1.1.1.1/32"));
+        assert.equal(config.route.rules[healthRule].outbound, "node");
+        assert.ok(healthRule > config.route.rules.findIndex(r => r.process_path));
+        if (mode === "smart") assert.ok(healthRule < config.route.rules.findIndex(r => r.rule_set));
         assert.equal(
             config.route.rules.some((r) =>
                 r.rule_set?.includes("qingzhou-cn-ip"),
@@ -124,6 +129,13 @@ test("routing modes use complete offline datasets and preserve saved node config
             mode === "smart",
         );
     }
+});
+
+test("sing-box direct-only profiles do not attach an invalid direct DNS detour", () => {
+    const original = profile("sing-box", 18080, 18081);
+    original.config.outbounds = [{ type: "direct" }];
+    const prepared = applyRouting(original, "smart");
+    assert.equal(prepared.config.dns.servers.find(s => s.tag === REMOTE_DNS).detour, undefined);
 });
 async function marker(label) {
     const sockets = new Set();

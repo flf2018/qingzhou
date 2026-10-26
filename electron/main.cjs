@@ -14,11 +14,12 @@ const { pathToFileURL } = require("node:url");
 const { ProfileStore, parseConfig } = require("./profiles.cjs");
 const { CoreController } = require("./core.cjs");
 const { ConnectionRecovery, prepareHealthProfile } = require("./recovery.cjs");
+const { HealthJournal } = require("./health-journal.cjs");
 const { importText } = require("./shares.cjs");
 const { SystemProxy } = require("./proxy.cjs");
 const { randomUUID } = require("node:crypto");
 const { MeasurementController, transfer } = require("./measure.cjs");
-const { systemProbe, verifyConnectivity } = require("./connectivity.cjs");
+const { systemProbe, verifyConnectivity, verifyTunConnectivity } = require("./connectivity.cjs");
 const { applyRouting, modeOf } = require("./routing.cjs");
 const { setTimeout: delay } = require("node:timers/promises");
 const {
@@ -124,6 +125,7 @@ const snapshot = () => ({
     measurements: measurement?.results || {},
     measuringId: measurement?.busyId || null,
     core: core.state,
+    connectionHealth: recovery?.state,
     logs,
     revision: ++revision,
 });
@@ -213,9 +215,7 @@ async function launch() {
                 (phase) => {
                     broadcast();
                     if (phase === "stopped" && core?.child && !connectionBusy)
-                        connection(stopConnection).catch((error) =>
-                            log(error.message),
-                        );
+                        unexpectedStop("TUN 意外退出，正在恢复连接。");
                 },
                 log,
             );
@@ -223,31 +223,36 @@ async function launch() {
                 app.getPath("userData"),
                 (state) => {
                     broadcast();
-                    if (state.phase === "stopped" && tun?.child)
-                        tun.stop().catch((error) => log(error.message));
-                    if (state.phase === "stopped" && proxy.active)
-                        proxy
-                            .restore()
-                            .then(broadcast)
-                            .catch(() =>
-                                log(
-                                    "恢复系统代理失败，请在设置中重试停止连接。",
-                                ),
-                            );
+                    if (state.phase === "stopped" && !connectionBusy)
+                        unexpectedStop("节点内核意外退出，正在恢复连接。");
                 },
                 log,
             );
+            function unexpectedStop(reason) {
+                if (quitRequested) return;
+                connection(async () => {
+                    log(reason);
+                    await stopConnection(true);
+                    recovery?.interrupted(reason);
+                }).catch(error => log(error.message));
+            }
             let suspended = false;
+            const healthJournal = new HealthJournal(app.getPath("userData"));
             recovery = new ConnectionRecovery({
                 busy: () => connectionBusy || quitting || quitRequested || suspended,
                 log,
+                changed: (state) => {
+                    broadcast();
+                    healthJournal.record(state).catch(() =>
+                        log("连接诊断日志写入失败。"));
+                },
                 probe: async (session) => {
                     if (core.state.phase !== "running") throw Error("内核已停止");
                     if (session.port) await verifyConnectivity(async (url) => {
                         const result = await transfer(session.port, url, { budget: 8000 });
                         if (result.status !== 204) throw Error("节点响应异常");
                     });
-                    if (session.tun) await verifyConnectivity(systemProbe);
+                    if (session.tun) await verifyTunConnectivity(systemProbe);
                 },
                 reconnect: (session) => connection(async () => {
                     if (recovery.session !== session || quitRequested) return;
@@ -473,7 +478,7 @@ async function launch() {
                             path.join(coreRoot, "sing-box", "sing-box.exe"),
                             bridge,
                         );
-                        await verifyConnectivity(systemProbe);
+                        await verifyTunConnectivity(systemProbe);
                         if (!tun.child) throw new Error("TUN 已退出");
                         tun.update("running");
                         log(
@@ -489,7 +494,7 @@ async function launch() {
                 } catch (error) {
                     log(`连接检查失败：${error.message}`);
                     await stopConnection(recovering);
-                    if (tunAttempted) {
+                    if (tunAttempted && !recovering) {
                         store.data.tunEnabled = false;
                         await store.save();
                         if (

@@ -1,6 +1,6 @@
 {
     "name": "v2rayn-electron",
-    "version": "0.6.0",
+    "version": "0.6.1",
     "private": true,
     "description": "轻舟，一款独立运行的桌面代理客户端",
     "license": "GPL-3.0",

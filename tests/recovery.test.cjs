@@ -73,3 +73,34 @@ test("connection transitions and sleep defer checks without accumulating failure
     assert.equal(probes, 0);
     assert.equal(f.monitor.session.failures, 0);
 });
+
+test("failed probes and reconnects stay degraded until a real successful probe", async () => {
+    const states = [];
+    const f = fixture({ changed: state => states.push(state),
+        reconnect: async () => { throw Error("node unavailable"); } });
+    await f.monitor.check();
+    assert.equal(f.monitor.state.phase, "degraded");
+    assert.equal(f.monitor.state.error, "offline");
+    await f.monitor.check();
+    assert.ok(states.some(state => state.phase === "reconnecting"));
+    assert.equal(f.monitor.state.phase, "degraded");
+    assert.equal(f.monitor.state.error, "node unavailable");
+    f.monitor.probe = async () => {};
+    await f.monitor.check();
+    assert.equal(f.monitor.state.phase, "healthy");
+    assert.equal(f.monitor.state.error, null);
+});
+
+test("unexpected exit keeps the session and schedules recovery; manual stop cancels it", async () => {
+    const f = fixture();
+    f.monitor.interrupted("TUN exited");
+    assert.equal(f.wait(), 5000);
+    assert.equal(f.monitor.state.phase, "degraded");
+    await f.monitor.check();
+    assert.equal(f.reconnects(), 1);
+    f.monitor.stop();
+    f.monitor.interrupted("late exit");
+    await f.monitor.check();
+    assert.equal(f.reconnects(), 1);
+    assert.equal(f.monitor.state.phase, "stopped");
+});

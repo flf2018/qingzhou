@@ -1,6 +1,6 @@
 const https = require("node:https");
 
-function systemProbe(url, budget = 8000, request = https.get) {
+function systemProbe(url, budget = 8000, request = https.get, expectedStatus = 204) {
     return new Promise((resolve, reject) => {
         let settled = false;
         const finish = (error) => {
@@ -24,7 +24,7 @@ function systemProbe(url, budget = 8000, request = https.get) {
             (response) => {
                 response.resume();
                 finish(
-                    response.statusCode === 204
+                    response.statusCode === expectedStatus
                         ? null
                         : new Error(
                               `TUN 联网检查返回 HTTP ${response.statusCode}`,
@@ -37,6 +37,7 @@ function systemProbe(url, budget = 8000, request = https.get) {
     });
 }
 async function verifyConnectivity(probe) {
+    const failures = [];
     const targets = [
         "https://www.gstatic.com/generate_204",
         "https://cp.cloudflare.com/generate_204",
@@ -45,8 +46,15 @@ async function verifyConnectivity(probe) {
         try {
             await probe(target);
             return;
-        } catch {}
+        } catch (error) {
+            failures.push(`${new URL(target).hostname}: ${error.message}`);
+        }
     }
-    throw new Error("网络连通性检查失败");
+    throw new Error(`网络连通性检查失败（${failures.join("；")}）`);
 }
-module.exports = { systemProbe, verifyConnectivity };
+async function verifyTunConnectivity(probe = systemProbe) {
+    // A literal public IP avoids physical-adapter DNS mapping the health domain
+    // to a domestic/direct destination. TLS still verifies the IP certificate.
+    await probe("https://1.1.1.1/cdn-cgi/trace", 8000, undefined, 200);
+}
+module.exports = { systemProbe, verifyConnectivity, verifyTunConnectivity };

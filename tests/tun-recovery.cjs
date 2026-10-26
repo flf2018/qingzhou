@@ -7,7 +7,7 @@ const os = require("node:os");
 app.disableHardwareAcceleration();
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), "chenglian-recovery-"));
 app.setPath("userData", directory);
-let monitor, simulatedOffline = false, coreStarts = 0, osOffline = true, networkChecks = 0;
+let activeTun, healthJournal, monitor, simulatedOffline = false, coreStarts = 0, osOffline = true, networkChecks = 0;
 const config = {
     inbounds: [{ protocol: "http", listen: "127.0.0.1", port: 10808 }],
     outbounds: [{ protocol: "freedom" }],
@@ -37,6 +37,12 @@ function replace(module, update) {
     require.cache[name].exports = { ...original, ...update };
 }
 const { ConnectionRecovery } = require("../electron/recovery.cjs");
+const { HealthJournal } = require("../electron/health-journal.cjs");
+replace("../electron/health-journal.cjs", {
+    HealthJournal: class extends HealthJournal {
+        constructor(...args) { super(...args); healthJournal = this; }
+    },
+});
 replace("../electron/recovery.cjs", {
     ConnectionRecovery: class extends ConnectionRecovery {
         constructor(options) {
@@ -89,6 +95,7 @@ replace("../electron/tun.cjs", {
     },
     TunController: class {
         constructor(_dir, _host, changed) {
+            activeTun = this;
             this.changed = changed;
             this.child = null;
             this.phase = "stopped";
@@ -164,8 +171,37 @@ app.on("browser-window-created", (_event, window) =>
             assert.equal(tunRecovered.data.tunEnabled, true);
             assert.equal(coreStarts, beforeTunRecovery + 1);
             assert.equal(networkChecks, beforeNetworkChecks + 1);
+            // A failed automatic TUN check must not silently save TUN=false.
+            simulatedOffline = true;
+            osOffline = true;
+            monitor.session.retryAt = 0;
+            await monitor.check();
+            await monitor.check();
+            const failedRetry = await window.webContents.executeJavaScript("window.desktop.snapshot()");
+            assert.equal(failedRetry.data.tunEnabled, true);
+            assert.equal(failedRetry.data.proxyActive, false);
+            assert.equal(failedRetry.data.connectionHealth.phase, "degraded");
+            assert.ok(monitor.session);
+            osOffline = false;
+            simulatedOffline = false;
+            monitor.session.retryAt = 0;
+            await monitor.check();
+            assert.equal(activeTun.active, true);
+            // An unexpected TUN exit must clean up without cancelling user intent.
+            activeTun.child = null;
+            activeTun.update("stopped");
+            await new Promise(resolve => setTimeout(resolve, 30));
+            assert.ok(monitor.session, "Unexpected TUN exit cancelled automatic recovery");
+            monitor.session.retryAt = 0;
+            await monitor.check();
+            await monitor.check();
+            const restarted = await window.webContents.executeJavaScript("window.desktop.snapshot()");
+            assert.equal(restarted.data.tunActive, true);
             await window.webContents.executeJavaScript("window.desktop.stop()");
             assert.equal(monitor.session, null);
+            await healthJournal.pending;
+            const journal = fs.readFileSync(path.join(directory, "connection-health.jsonl"), "utf8");
+            assert.ok(journal.includes('"phase":"degraded"'));
             console.log(
                 "TUN failure rolls back to system proxy; node-page switch can stop an active connection. No OS settings changed.",
             );

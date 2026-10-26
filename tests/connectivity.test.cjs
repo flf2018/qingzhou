@@ -4,6 +4,7 @@ const { EventEmitter } = require("node:events");
 const {
     systemProbe,
     verifyConnectivity,
+    verifyTunConnectivity,
 } = require("../electron/connectivity.cjs");
 
 test("TUN health check uses OS routes/DNS, IPv4 and requires a 204 response", async () => {
@@ -36,6 +37,21 @@ test("TUN health check uses OS routes/DNS, IPv4 and requires a 204 response", as
         /超时/,
     );
 });
+
+test("TUN check uses a literal public IP and requires its expected HTTP status", async () => {
+    await verifyTunConnectivity(async (url, budget, request, expected) => {
+        assert.equal(new URL(url).hostname, "1.1.1.1");
+        assert.equal(budget, 8000);
+        assert.equal(expected, 200);
+        await systemProbe(url, budget, (_url, options, callback) => {
+            assert.equal(options.family, 4);
+            const req = new EventEmitter();
+            req.destroy = () => {};
+            setImmediate(() => callback({ statusCode: 200, resume() {} }));
+            return req;
+        }, expected);
+    });
+});
 test("health check tries a second provider and never treats total failure as ready", async () => {
     let calls = 0;
     await verifyConnectivity(async () => {
@@ -46,6 +62,7 @@ test("health check tries a second provider and never treats total failure as rea
         verifyConnectivity(async () => {
             throw Error("offline");
         }),
-        /网络连通性检查失败/,
+        error => /www.gstatic.com: offline/.test(error.message)
+            && /cp.cloudflare.com: offline/.test(error.message),
     );
 });
