@@ -46,11 +46,11 @@ function measurementProfile(profile, port) {
     return prepared;
 }
 
-function proxyAgent(proxyPort, target, signal) {
+function proxyAgent(proxyPort, target, signal, proxyHost) {
     const agent = new https.Agent({ keepAlive: false });
     agent.createConnection = (_options, callback) => {
         const connect = http.request({
-            host: "127.0.0.1",
+            host: proxyHost,
             port: proxyPort,
             method: "CONNECT",
             path: `${target.hostname}:${target.port || 443}`,
@@ -98,6 +98,8 @@ function transfer(
         limit = 1024,
         budget = 10000,
         partial = false,
+        proxyHost = "127.0.0.1",
+        acceptStatus = (status) => status >= 200 && status < 300,
     } = {},
 ) {
     return new Promise((resolve, reject) => {
@@ -108,7 +110,7 @@ function transfer(
         if (signal?.aborted) controller.abort();
         const agent =
             target.protocol === "https:"
-                ? proxyAgent(proxyPort, target, controller.signal)
+                ? proxyAgent(proxyPort, target, controller.signal, proxyHost)
                 : undefined;
         const started = performance.now();
         let bytes = 0,
@@ -157,7 +159,7 @@ function transfer(
                           : { "Accept-Encoding": "identity" },
                   }
                 : {
-                      host: "127.0.0.1",
+                      host: proxyHost,
                       port: proxyPort,
                       path: target.href,
                       method,
@@ -170,7 +172,7 @@ function transfer(
                   },
             (response) => {
                 responseStatus = response.statusCode;
-                if (responseStatus < 200 || responseStatus >= 300) {
+                if (!acceptStatus(responseStatus)) {
                     response.destroy();
                     finish(new Error(`测速服务返回 HTTP ${responseStatus}。`));
                     return;

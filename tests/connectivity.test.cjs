@@ -5,6 +5,7 @@ const {
     systemProbe,
     verifyConnectivity,
     verifyTunConnectivity,
+    verifySessionConnectivity,
 } = require("../electron/connectivity.cjs");
 
 test("TUN health check uses OS routes/DNS, IPv4 and requires a 204 response", async () => {
@@ -36,6 +37,51 @@ test("TUN health check uses OS routes/DNS, IPv4 and requires a 204 response", as
         }),
         /超时/,
     );
+});
+
+test("healthy dedicated probes cannot mask a ChatGPT certificate failure on the browser path", async () => {
+    for (const tun of [false, true]) {
+        const calls = [];
+        await assert.rejects(verifySessionConnectivity(
+            { port: 9000, httpPort: 10808, tun }, {
+                transfer: async (port, url) => {
+                    calls.push([port, url]);
+                    if (url.includes("chatgpt.com")) throw Error("ERR_TLS_CERT_ALTNAME_INVALID");
+                    return { status: 204 };
+                },
+                system: async (url) => {
+                    calls.push(["system", url]);
+                    if (url.includes("chatgpt.com")) throw Error("ERR_TLS_CERT_ALTNAME_INVALID");
+                },
+            },
+        ), /ChatGPT.*ERR_TLS_CERT_ALTNAME_INVALID/);
+        assert.ok(calls.some(([path, url]) => path === (tun ? "system" : 10808) && url.includes("chatgpt.com")));
+    }
+});
+
+test("ChatGPT challenges pass TLS health checks without downloading a challenge body", async () => {
+    await verifySessionConnectivity({ port: 9000, httpPort: 10808, httpHost: "::1" }, {
+        transfer: async (port, url, options) => {
+            if (!url.includes("chatgpt.com")) return { status: 204 };
+            assert.equal(port, 10808);
+            assert.equal(options.proxyHost, "::1");
+            assert.equal(options.method, "HEAD");
+            assert.equal(options.acceptStatus(403), true);
+            return { status: 403 };
+        },
+    });
+    await verifySessionConnectivity({ tun: true }, {
+        system: async (url, budget, request, expected) => {
+            if (!url.includes("chatgpt.com")) return;
+            await systemProbe(url, budget, (_url, options, callback) => {
+                assert.equal(options.method, "HEAD");
+                const req = new EventEmitter();
+                req.destroy = () => {};
+                setImmediate(() => callback({ statusCode: 403, resume() {} }));
+                return req;
+            }, expected);
+        },
+    });
 });
 
 test("TUN check uses a literal public IP and requires its expected HTTP status", async () => {

@@ -19,7 +19,7 @@ const { importText } = require("./shares.cjs");
 const { SystemProxy } = require("./proxy.cjs");
 const { randomUUID } = require("node:crypto");
 const { MeasurementController, transfer } = require("./measure.cjs");
-const { systemProbe, verifyConnectivity, verifyTunConnectivity } = require("./connectivity.cjs");
+const { systemProbe, verifyConnectivity, verifyTunConnectivity, verifySessionConnectivity } = require("./connectivity.cjs");
 const { applyRouting, modeOf } = require("./routing.cjs");
 const { setTimeout: delay } = require("node:timers/promises");
 const {
@@ -248,11 +248,7 @@ async function launch() {
                 },
                 probe: async (session) => {
                     if (core.state.phase !== "running") throw Error("内核已停止");
-                    if (session.port) await verifyConnectivity(async (url) => {
-                        const result = await transfer(session.port, url, { budget: 8000 });
-                        if (result.status !== 204) throw Error("节点响应异常");
-                    });
-                    if (session.tun) await verifyTunConnectivity(systemProbe);
+                    await verifySessionConnectivity(session, { transfer, system: systemProbe });
                 },
                 reconnect: (session) => connection(async () => {
                     if (recovery.session !== session || quitRequested) return;
@@ -486,7 +482,8 @@ async function launch() {
                         );
                     } else if (store.data.systemProxy !== false)
                         await proxy.enable(profile);
-                    const session = { id, port: healthPort, tun: !!bridge };
+                    const session = { id, port: healthPort, tun: !!bridge,
+                        httpPort: profile.httpPort, httpHost: profile.httpHost };
                     if (recovering && recovery.session) Object.assign(recovery.session, session);
                     else if (session.port || session.tun) recovery.start(session);
                     if (core.state.phase !== "running")
@@ -516,7 +513,8 @@ async function launch() {
                                 await stopConnection(recovering);
                             }
                             if (recovered) {
-                                const session = { id, port: healthPort, tun: false };
+                                const session = { id, port: healthPort, tun: false,
+                                    httpPort: profile.httpPort, httpHost: profile.httpHost };
                                 if (recovering && recovery.session) Object.assign(recovery.session, session);
                                 else recovery.start(session);
                                 log("TUN 联网检查失败，已关闭 TUN 并回退到系统代理。");

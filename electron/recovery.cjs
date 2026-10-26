@@ -1,10 +1,10 @@
 // Runs in the main process even when the window is hidden in the tray.
 class ConnectionRecovery {
-    constructor({ probe, reconnect, busy, log, now = Date.now, interval = 60000,
-        cooldown = 180000, schedule = setTimeout, cancel = clearTimeout,
+    constructor({ probe, reconnect, busy, log, now = Date.now, interval = 30000,
+        failureInterval = 5000, cooldown = 180000, schedule = setTimeout, cancel = clearTimeout,
         changed = () => {} }) {
         Object.assign(this, { probe, reconnect, busy, log, now, interval,
-            cooldown, schedule, cancel, changed });
+            failureInterval, cooldown, schedule, cancel, changed });
         this.session = null;
         this.checking = false;
         this.state = { phase: "stopped", checkedAt: null, error: null };
@@ -17,7 +17,7 @@ class ConnectionRecovery {
         this.stop();
         this.session = { ...session, failures: 0, retryAt: 0 };
         this.update("checking", null, null);
-        this.arm(this.interval);
+        this.arm(this.failureInterval);
     }
     stop() {
         this.session = null;
@@ -51,6 +51,7 @@ class ConnectionRecovery {
             await this.probe(session);
             if (this.session === session) {
                 session.failures = 0;
+                session.retryAt = 0;
                 this.update("healthy", null, this.now());
             }
         } catch (error) {
@@ -67,6 +68,7 @@ class ConnectionRecovery {
                 await this.reconnect(session);
                 if (this.session === session) {
                     session.failures = 0;
+                    session.retryAt = 0;
                     this.update("healthy", null, this.now());
                     this.log("当前节点已重新连接并通过联网检查。");
                 }
@@ -78,7 +80,7 @@ class ConnectionRecovery {
             }
         } finally {
             this.checking = false;
-            if (this.session) this.arm(this.interval);
+            if (this.session) this.arm(this.session.failures ? this.failureInterval : this.interval);
         }
     }
 }

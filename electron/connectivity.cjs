@@ -19,12 +19,13 @@ function systemProbe(url, budget = 8000, request = https.get, expectedStatus = 2
             {
                 agent: false,
                 family: 4,
+                method: expectedStatus === null ? "HEAD" : "GET",
                 headers: { "Cache-Control": "no-cache" },
             },
             (response) => {
                 response.resume();
                 finish(
-                    response.statusCode === expectedStatus
+                    (expectedStatus === null || response.statusCode === expectedStatus)
                         ? null
                         : new Error(
                               `TUN 联网检查返回 HTTP ${response.statusCode}`,
@@ -57,4 +58,27 @@ async function verifyTunConnectivity(probe = systemProbe) {
     // to a domestic/direct destination. TLS still verifies the IP certificate.
     await probe("https://1.1.1.1/cdn-cgi/trace", 8000, undefined, 200);
 }
-module.exports = { systemProbe, verifyConnectivity, verifyTunConnectivity };
+async function verifySessionConnectivity(session, { transfer, system = systemProbe }) {
+    if (session.port) await verifyConnectivity(async (url) => {
+        const result = await transfer(session.port, url, { budget: 8000 });
+        if (result.status !== 204) throw Error("节点响应异常");
+    });
+    if (session.tun) await verifyTunConnectivity(system);
+    // The dedicated health inbound and literal-IP TUN probe bypass normal
+    // domain routing/DNS. Check the browser's path too, with TLS validation on.
+    // A Cloudflare challenge is reachable HTTPS, not a disconnected node.
+    const target = "https://chatgpt.com/";
+    try {
+        if (session.tun) await system(target, 8000, undefined, null);
+        else if (session.httpPort || session.port) await transfer(
+            session.httpPort || session.port, target, {
+                budget: 8000, method: "HEAD",
+                proxyHost: session.httpHost || "127.0.0.1",
+                acceptStatus: status => status >= 200 && status < 600,
+            },
+        );
+    } catch (error) {
+        throw new Error(`ChatGPT 实际访问路径检查失败：${error.message}`);
+    }
+}
+module.exports = { systemProbe, verifyConnectivity, verifyTunConnectivity, verifySessionConnectivity };

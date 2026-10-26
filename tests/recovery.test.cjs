@@ -104,3 +104,23 @@ test("unexpected exit keeps the session and schedules recovery; manual stop canc
     assert.equal(f.reconnects(), 1);
     assert.equal(f.monitor.state.phase, "stopped");
 });
+
+test("domain path failure gets a fast confirmation and a successful probe clears old cooldown", async () => {
+    let healthy = false;
+    const f = fixture({ probe: async () => {
+        if (!healthy) throw Error("ChatGPT certificate mismatch");
+    } });
+    assert.equal(f.wait(), 5000);
+    await f.monitor.check();
+    assert.equal(f.wait(), 5000);
+    await f.monitor.check();
+    assert.equal(f.reconnects(), 1);
+    healthy = true;
+    f.monitor.session.retryAt = 180000;
+    await f.monitor.check();
+    assert.equal(f.wait(), 30000);
+    healthy = false;
+    await f.monitor.check();
+    await f.monitor.check();
+    assert.equal(f.reconnects(), 2);
+});

@@ -8,7 +8,8 @@ const { version } = require("../package.json");
 const execute = promisify(execFile);
 (async () => {
     const root = path.resolve(__dirname, "..");
-    const archive = path.join(root, `release/QingZhou-${version}-win-x64.zip`);
+    const archive = process.argv[2] ? path.resolve(process.argv[2])
+        : path.join(root, `release/QingZhou-${version}-win-x64.zip`);
     const directory = await fs.mkdtemp(
         path.join(os.tmpdir(), "chenglian-zip-"),
     );

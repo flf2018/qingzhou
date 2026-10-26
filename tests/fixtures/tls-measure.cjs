@@ -15,7 +15,7 @@ const { CoreController } = require("../../electron/core.cjs");
             cert: fs.readFileSync(path.join(__dirname, "localhost-cert.pem")),
             key: fs.readFileSync(path.join(__dirname, "localhost-key.pem")),
         },
-        (_req, res) => res.writeHead(204).end(),
+        (req, res) => res.writeHead(req.url === "/challenge" ? 403 : 204).end(),
     );
     server.listen(0);
     await once(server, "listening");
@@ -45,9 +45,18 @@ const { CoreController } = require("../../electron/core.cjs");
             `https://localhost:${server.address().port}/latency`,
             { budget: 3000 },
         );
-        if (process.env.NODE_EXTRA_CA_CERTS)
+        if (process.env.NODE_EXTRA_CA_CERTS) {
             assert.equal((await result).status, 204);
-        else await assert.rejects(result, /self.signed certificate/i);
+            const options = { budget: 3000, method: "HEAD",
+                acceptStatus: status => status >= 200 && status < 600 };
+            assert.equal((await transfer(port,
+                `https://localhost:${server.address().port}/challenge`, options)).status, 403);
+            // A trusted certificate with the wrong domain must still fail,
+            // even when HTTP challenges are accepted for health monitoring.
+            await assert.rejects(transfer(port,
+                `https://127.0.0.1:${server.address().port}/challenge`, options),
+                /IP.*not in.*cert|altnames|alternative names/i);
+        } else await assert.rejects(result, /self.signed certificate/i);
         console.log("HTTPS CONNECT proxy and certificate validation verified.");
     } finally {
         await core.stop();

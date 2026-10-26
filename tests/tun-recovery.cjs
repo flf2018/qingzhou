@@ -8,6 +8,7 @@ app.disableHardwareAcceleration();
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), "chenglian-recovery-"));
 app.setPath("userData", directory);
 let activeTun, healthJournal, monitor, simulatedOffline = false, coreStarts = 0, osOffline = true, networkChecks = 0;
+let domainOffline = false;
 const config = {
     inbounds: [{ protocol: "http", listen: "127.0.0.1", port: 10808 }],
     outbounds: [{ protocol: "freedom" }],
@@ -63,6 +64,7 @@ replace("../electron/core.cjs", {
         }
         async start(profile) {
             coreStarts++;
+            domainOffline = false;
             this.child = {};
             this.state = { phase: "running", profileId: profile.id };
             this.changed(this.state);
@@ -117,10 +119,14 @@ replace("../electron/tun.cjs", {
         }
     },
 });
-replace("../electron/measure.cjs", { transfer: async () => ({ status: 204 }) });
+replace("../electron/measure.cjs", { transfer: async (_port, url) => {
+    if (domainOffline && url.includes("chatgpt.com")) throw Error("ERR_TLS_CERT_ALTNAME_INVALID");
+    return { status: url.includes("chatgpt.com") ? 403 : 204 };
+} });
 replace("../electron/connectivity.cjs", {
-    systemProbe: async () => {
+    systemProbe: async (url) => {
         if (osOffline) throw Error("Simulated OS network failure");
+        if (domainOffline && url.includes("chatgpt.com")) throw Error("ERR_TLS_CERT_ALTNAME_INVALID");
     },
 });
 const timer = setTimeout(() => app.exit(1), 15000);
@@ -148,13 +154,19 @@ app.on("browser-window-created", (_event, window) =>
             const recovered = await window.webContents.executeJavaScript("window.desktop.snapshot()");
             assert.equal(recovered.data.core.phase, "running");
             assert.equal(recovered.data.proxyActive, true);
+            domainOffline = true;
+            await monitor.check();
+            assert.match(monitor.state.error, /ChatGPT.*ERR_TLS_CERT_ALTNAME_INVALID/);
+            await monitor.check();
+            assert.equal(monitor.state.phase, "healthy");
+            assert.equal(coreStarts, initialStarts + 2);
             const off = await window.webContents.executeJavaScript("window.desktop.setTun(false)");
             assert.equal(off.ok, true);
             assert.equal(off.data.core.phase, "stopped");
             assert.equal(off.data.proxyActive, false);
             assert.equal(monitor.session, null);
             await monitor.check();
-            assert.equal(coreStarts, initialStarts + 1);
+            assert.equal(coreStarts, initialStarts + 2);
             // Exercise a live TUN session recovering after idle failure too.
             osOffline = false;
             await window.webContents.executeJavaScript("window.desktop.setTun(true)");
@@ -171,6 +183,13 @@ app.on("browser-window-created", (_event, window) =>
             assert.equal(tunRecovered.data.tunEnabled, true);
             assert.equal(coreStarts, beforeTunRecovery + 1);
             assert.equal(networkChecks, beforeNetworkChecks + 1);
+            domainOffline = true;
+            await monitor.check();
+            assert.match(monitor.state.error, /ChatGPT.*ERR_TLS_CERT_ALTNAME_INVALID/);
+            await monitor.check();
+            assert.equal(coreStarts, beforeTunRecovery + 2);
+            assert.equal(monitor.state.phase, "healthy");
+            assert.equal(activeTun.active, true);
             // A failed automatic TUN check must not silently save TUN=false.
             simulatedOffline = true;
             osOffline = true;
